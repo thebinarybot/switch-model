@@ -38,6 +38,18 @@ if [[ ${#PROMPT} -lt 8 ]]; then
   exit 0
 fi
 
+# Follow-up detection: if prompt is a continuation of a prior turn,
+# skip routing — subprocess has no main-session context, so let the
+# main model handle natively (it has full history).
+if [[ "${SWITCH_MODEL_NO_FOLLOWUP:-0}" != "1" ]]; then
+  if printf '%s' "$PROMPT" | python3 "$PLUGIN_ROOT/lib/followup.py" 2>>"$LOG" >/dev/null; then
+    : # rc=0 → not a follow-up, continue routing
+  else
+    printf '{"status":"skipped_followup"}\n' > "$STATE_DIR/state.json"
+    exit 0
+  fi
+fi
+
 tier_rank() {
   case "$1" in
     haiku) echo 0 ;;

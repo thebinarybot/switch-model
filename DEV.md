@@ -15,6 +15,7 @@ switch-model/
 │   ├── classify.py          # hybrid heuristic + LLM + context classifier
 │   ├── context.py           # transcript signal extractor
 │   ├── effort.py            # effort-level picker
+│   ├── followup.py          # follow-up detector (skip-routing decision)
 │   └── pricing.py           # tier pricing + savings calc
 ├── statusline.sh            # optional statusline (user wires manually)
 ├── README.md                # quick reference
@@ -105,6 +106,12 @@ user types prompt
         |
         v
    short prompt: if len(prompt) < 8 -> exit 0
+        |
+        v
+   followup.py reads prompt from stdin
+     -> rc=1 (is_followup) AND SWITCH_MODEL_NO_FOLLOWUP != 1
+        write state.json status:skipped_followup, exit 0 (passthrough)
+     -> rc=0 (not a follow-up): continue routing
         |
         v
    classify.py reads prompt from stdin, returns tier on stdout
@@ -234,6 +241,7 @@ The result string is parsed by `for tier in ('haiku','sonnet','opus'): if tier i
 | `SWITCH_MODEL_NO_CONTEXT=1`     | Skip transcript context analysis (stage 2)          |
 | `SWITCH_MODEL_NO_EFFORT=1`      | Skip effort selection; subprocess uses Claude default |
 | `SWITCH_MODEL_AUTO_UPGRADE=1`   | Skip the upgrade-confirmation gate (silent upgrades)|
+| `SWITCH_MODEL_NO_FOLLOWUP=1`    | Disable follow-up detection (route every prompt)    |
 | `SWITCH_MODEL_DEBUG=1`          | Print classify decisions to stderr (hook log)       |
 | `SWITCH_MODEL_TRANSCRIPT_PATH`  | Path to session JSONL; set by router.sh             |
 | `MODEL_ROUTER_BYPASS=1`        | Recursion guard; subprocess sets this               |
@@ -282,6 +290,41 @@ tools >= 8 and errors == 0 and tier == opus and conf < 0.9
 ```
 
 Tie-break: rules apply in order. Later rules can override earlier ones if their conditions hold.
+
+## Follow-up detector (`lib/followup.py`)
+
+Returns a boolean decision on whether the current prompt is a continuation of a prior turn that the subprocess can't answer correctly without main-session history.
+
+CLI contract:
+
+```
+stdin:  prompt text
+stdout: short reason if follow-up, else empty
+exit:   0 = not a follow-up (continue routing)
+        1 = is a follow-up (router should skip)
+```
+
+### Detection rules
+
+Four independent triggers (any one positive → flagged as follow-up):
+
+1. **Short pronoun-led prompt** — `len(prompt) < 40` AND opens with `it / that / this / they / these / those / he / she / him / her`. Catches "it should be red", "they are not working".
+2. **Continuation cue at start** — regex on `now (also|do|make|change|fix|add|remove|try) | and (also|now|then) | also | but (what about|wait) | instead | undo | redo | again | keep going | continue | more of (that|the same) | another (one|example) | do the same`.
+3. **Explicit reference to prior turn** — `(previous|above|last|earlier|prior) (answer|response|message|version|attempt|one|reply|output|result)`.
+4. **Bare anaphoric phrase** — `len(prompt) < 80` AND regex matches `show me more | tell me more | explain (it|that) again | why is (it|that) | what about (it|that) | do (it|that) (again|differently) | fix (it|that)`.
+
+Bias is conservative — false negatives (route a follow-up) are cheaper than false positives (skip routing on a self-contained prompt that should have routed to Haiku).
+
+### Env knobs
+
+| Var                            | Effect                                              |
+|--------------------------------|-----------------------------------------------------|
+| `SWITCH_MODEL_NO_FOLLOWUP=1`    | Disable detector entirely (always rc=0)             |
+| `SWITCH_MODEL_DEBUG=1`          | Print detection trace to stderr                     |
+
+### Why router calls it before classify
+
+Cheap to skip early: a positive detection avoids classifier (which may spawn the haiku LLM call), avoids effort selection, avoids the routed subprocess. Order in `router.sh`: recursion guard → stdin parse → bypass prefixes → length check → **followup** → classify → effort → current-model detect → match check → upgrade gate → spawn.
 
 ## Effort picker (`lib/effort.py`)
 
@@ -359,6 +402,7 @@ Bash. Key sections:
 
 - **stdin parsing** — extracts `prompt`, `transcript_path`, `session_id` via inline `python3 -c`. Bash `jq` would be cleaner but adds a dependency.
 - **bypass / consent prefixes** — `+force ` and `+keep ` exit 0 immediately (passthrough). `+upgrade ` strips the prefix and sets a local `FORCE_UPGRADE=1` flag that the upgrade gate later checks.
+- **followup check** — pipes prompt to `python3 $PLUGIN_ROOT/lib/followup.py`. Exit 1 → write state `status:skipped_followup` and exit 0 (passthrough). Skipped when `SWITCH_MODEL_NO_FOLLOWUP=1`.
 - **classify** — pipes prompt to `python3 $PLUGIN_ROOT/lib/classify.py`. Result captured.
 - **current model detection** — `grep -o '"model":"claude-[a-z0-9-]*"' "$TRANSCRIPT" | tail -1`. First-prompt sessions have empty/missing transcript; falls back to `settings.json`.
 - **tier_rank()** — bash function mapping `haiku=0`, `sonnet=1`, `opus=2`. Used to detect upgrade direction (suggested rank > current rank).
@@ -373,7 +417,7 @@ The `printf '%s' "$INPUT" | python3 -c "..."` pattern avoids shell-escape issues
 
 | Path                              | Contents                                       |
 |-----------------------------------|------------------------------------------------|
-| `~/.cache/switch-model/state.json` | `{current, suggested, status, effort, savings?}` — `status` ∈ `match` / `routed` / `failed` / `upgrade_pending` |
+| `~/.cache/switch-model/state.json` | `{current, suggested, status, effort, savings?}` — `status` ∈ `match` / `routed` / `failed` / `upgrade_pending` / `skipped_followup` |
 | `~/.cache/switch-model/router.log` | stderr of subprocess + classify.py debug       |
 
 State is written every hook fire (match cases too) so statusline always has fresh data.
@@ -525,6 +569,8 @@ tail -50 ~/.cache/switch-model/router.log
 | Change recursion guard env var name          | `hooks/router.sh` and `classify.haiku_classify` (must stay in sync) |
 | Tune upgrade-gate behavior / message         | `hooks/router.sh` upgrade-gate block (after `tier_rank()`)          |
 | Add new bypass / consent prefixes            | `hooks/router.sh` near existing `+force` / `+keep` / `+upgrade` checks |
+| Tune follow-up detection rules               | `lib/followup.py` → `PRONOUN_START`, `CONTINUATION_CUES`, `REFERENTIAL_WORDS`, `ANAPHORIC_BARE` regexes |
+| Change follow-up length thresholds           | `lib/followup.py` → `SHORT_PROMPT_CHARS` (and inline literal in anaphoric branch) |
 
 ## Known issues
 
@@ -587,6 +633,39 @@ echo '{"prompt":"+upgrade design an architecture and explain why","transcript_pa
 echo '{"prompt":"design an architecture and explain why","transcript_path":"","session_id":"t"}' \
   | HOME="$TMP" SWITCH_MODEL_AUTO_UPGRADE=1 SWITCH_MODEL_NO_LLM=1 SWITCH_MODEL_NO_EFFORT=1 bash hooks/router.sh
 # expect: real subprocess fires; no upgrade-pending block.
+rm -rf "$TMP"
+
+# unit: follow-up detector positives + negatives
+for p in \
+  "it should be red" \
+  "now also add a header" \
+  "redo it differently" \
+  "the previous answer was wrong" \
+  "list files in lib" \
+  "design an architecture for our rate limiter" \
+  "fix the bug in auth middleware"; do
+  out=$(echo "$p" | python3 lib/followup.py); rc=$?
+  echo "rc=$rc reason=${out:-<none>}  ← $p"
+done
+# expect: first 4 → rc=1 (followup), last 3 → rc=0 (route normally)
+
+# unit: follow-up skip in full hook (router exits 0, no block emitted)
+TMP=$(mktemp -d); mkdir -p "$TMP/.claude" "$TMP/bin"
+echo '{"model":"claude-opus-4-7"}' > "$TMP/.claude/settings.json"
+printf '#!/usr/bin/env bash\necho MOCK\n' > "$TMP/bin/claude"; chmod +x "$TMP/bin/claude"
+echo '{"prompt":"now also add a header to that","transcript_path":"","session_id":"t"}' \
+  | HOME="$TMP" PATH="$TMP/bin:$PATH" SWITCH_MODEL_NO_LLM=1 SWITCH_MODEL_NO_EFFORT=1 bash hooks/router.sh
+# expect: empty stdout, rc=0, state.json status:skipped_followup
+cat "$TMP/.cache/switch-model/state.json"
+rm -rf "$TMP"
+
+# unit: SWITCH_MODEL_NO_FOLLOWUP=1 disables detector
+TMP=$(mktemp -d); mkdir -p "$TMP/.claude" "$TMP/bin"
+echo '{"model":"claude-opus-4-7"}' > "$TMP/.claude/settings.json"
+printf '#!/usr/bin/env bash\necho MOCK\n' > "$TMP/bin/claude"; chmod +x "$TMP/bin/claude"
+echo '{"prompt":"now also add a header to that","transcript_path":"","session_id":"t"}' \
+  | HOME="$TMP" PATH="$TMP/bin:$PATH" SWITCH_MODEL_NO_FOLLOWUP=1 SWITCH_MODEL_NO_LLM=1 SWITCH_MODEL_NO_EFFORT=1 bash hooks/router.sh
+# expect: subprocess fires (block:reason emitted)
 rm -rf "$TMP"
 
 # unit: downgrade still auto-routes (opus → haiku, no consent needed)

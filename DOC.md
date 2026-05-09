@@ -60,12 +60,14 @@ The Opus model never saw the prompt. The Haiku subprocess answered for ~$0.0001 
 | `+force` / `+keep` bypass   | Prefix prompt with `+force` to skip the router for this turn       |
 | `+upgrade` consent prefix   | Prefix prompt with `+upgrade` to confirm a router-suggested cheaper→pricier route |
 | Upgrade confirmation gate   | Cheaper→pricier routes are blocked and require explicit `+upgrade ` opt-in (or `SWITCH_MODEL_AUTO_UPGRADE=1`); downgrades still auto-route |
+| Follow-up detection         | Prompts that reference a prior turn (pronouns, "now also...", "redo", "the previous answer...") skip routing so the main session can answer with full context |
 | Recursion guard             | Subprocess sets env var so router doesn't fire on itself           |
 | Statusline badge (optional) | Shows current model + last routing decision                        |
 | Heuristics-only mode        | `SWITCH_MODEL_NO_LLM=1` skips the LLM tie-breaker                   |
 | No-context mode             | `SWITCH_MODEL_NO_CONTEXT=1` skips transcript signal analysis        |
 | No-effort mode              | `SWITCH_MODEL_NO_EFFORT=1` skips effort selection                   |
 | Auto-upgrade mode           | `SWITCH_MODEL_AUTO_UPGRADE=1` skips the upgrade confirmation gate (silent upgrades) |
+| No-followup mode            | `SWITCH_MODEL_NO_FOLLOWUP=1` disables follow-up detection (route every prompt)      |
 | Debug trace                 | `SWITCH_MODEL_DEBUG=1` logs decisions to hook stderr                |
 
 ## How effort matching helps
@@ -79,6 +81,24 @@ The plugin pairs every routed call with an effort level:
 - `deep dive into the consensus algorithm tradeoffs` on Opus → `xhigh` (research-grade)
 
 Per-tier effort ceilings prevent waste: Haiku capped at `low`, Sonnet at `high`, Opus at `max`.
+
+## How follow-up detection helps
+
+The plugin's biggest known limitation is that routed answers don't enter the main session's transcript — so if the user asks a follow-up like "now make it red", a subprocess invoked on that prompt has no idea what "it" refers to and produces a useless answer.
+
+The follow-up detector solves this by recognizing the shape of follow-up prompts and exiting the hook silently before any subprocess fires. The main session then handles the prompt natively, with full access to its prior turns.
+
+What it catches:
+- **Short pronoun-led prompts** ("it should be red", "they are not working") — under 40 chars, opens with `it / that / this / they / he / she / them`.
+- **Continuation cues at the start** ("now also add...", "and then ...", "instead", "undo", "redo", "again", "continue").
+- **Explicit references to prior turns** ("the previous answer was wrong", "fix the above response", "more detail on the last one").
+- **Bare anaphoric phrases** ("show me more", "fix it", "do that again", "explain it again").
+
+What it does NOT catch (deliberately):
+- Self-contained prompts that happen to use pronouns ("they are inefficient" without further reference) — risk too high of false positives.
+- Long prompts that mention "previous" but contain enough new content to stand alone.
+
+Tuning bias is conservative — when in doubt, route. False negatives just produce a slightly worse routed answer; false positives waste the main session's expensive tokens on a trivial prompt that should have routed to Haiku. Disable entirely with `SWITCH_MODEL_NO_FOLLOWUP=1` if needed.
 
 ## How upgrade gating helps
 
@@ -115,7 +135,7 @@ Savings depend on prompt mix and session length. Estimated 70–85% cost reducti
 
 Honest limitations:
 
-- **No multi-turn memory in routed answers.** When a prompt is routed to a different tier via subprocess, the answer is rendered to the user but does NOT enter the main session's in-memory history. Follow-up questions don't see the routed answer's content.
+- **No multi-turn memory in routed answers.** When a prompt is routed to a different tier via subprocess, the answer is rendered to the user but does NOT enter the main session's in-memory history. Follow-up questions don't see the routed answer's content. (Mitigated by the follow-up detector, which catches obvious continuations and skips routing — but it can't catch every case.)
 - **5–15s latency on routed prompts.** Subprocess spawn + classifier LLM call adds wall-clock delay. Trivial prompts feel slower than they would on the main session.
 - **No streaming.** Routed answers appear all at once when subprocess finishes. No live token streaming.
 - **Cost split.** Subprocess token usage isn't shown in the main session's `/cost` output. Total spend is correct on the Anthropic console but split across two CLI invocations.
@@ -144,6 +164,7 @@ Recently shipped:
 - Transcript context awareness
 - Effort-level matching
 - Upgrade confirmation gate (cheaper→pricier routes require `+upgrade ` consent, opt-out via `SWITCH_MODEL_AUTO_UPGRADE=1`)
+- Follow-up detection (continuations of prior turns skip routing so the main session can answer with full context, opt-out via `SWITCH_MODEL_NO_FOLLOWUP=1`)
 
 ## Security
 
