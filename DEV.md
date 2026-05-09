@@ -100,6 +100,10 @@ user types prompt
     both eat the prompt before the hook fires. + has no special meaning.)
         |
         v
+   upgrade-consent prefix: if prompt starts with "+upgrade " ->
+     strip prefix, set local FORCE_UPGRADE=1 (skip the upgrade gate later)
+        |
+        v
    short prompt: if len(prompt) < 8 -> exit 0
         |
         v
@@ -144,18 +148,28 @@ user types prompt
         +-- if current_tier == suggested -> write state.json status:match (with effort), exit 0
         |
         +-- else (mismatch):
-              compute savings_pct
-              spawn: MODEL_ROUTER_BYPASS=1 timeout 120 claude -p --model <suggested> --effort <effort> "<prompt>"
-              (skip --effort flag if SWITCH_MODEL_NO_EFFORT=1)
-              capture stdout
+              compute savings_pct  (negative when upgrading)
                 |
-                +-- success: emit JSON
-                |     {"decision":"block","reason":"<header>\n\n<answer>\n\n<footer>"}
-                |     write state.json status:routed
+                +-- upgrade gate: if tier_rank(suggested) > tier_rank(current_tier)
+                |     AND FORCE_UPGRADE != 1
+                |     AND SWITCH_MODEL_AUTO_UPGRADE != 1
+                |     -> emit JSON
+                |          {"decision":"block","reason":"...upgrade requires +upgrade prefix..."}
+                |          write state.json status:upgrade_pending, exit 0
                 |
-                +-- failure: emit JSON
-                      {"decision":"block","reason":"...subprocess failed; run /model X manually..."}
-                      write state.json status:failed
+                +-- otherwise (downgrade, same-cost, or upgrade with consent):
+                      spawn: MODEL_ROUTER_BYPASS=1 timeout 120 claude -p --model <suggested> --effort <effort> "<prompt>"
+                      (skip --effort flag if SWITCH_MODEL_NO_EFFORT=1)
+                      capture stdout
+                        |
+                        +-- success: emit JSON
+                        |     {"decision":"block","reason":"<header>\n\n<answer>\n\n<footer>"}
+                        |     header reads "saves ~X%" on downgrades, "costs ~+X%" on upgrades
+                        |     write state.json status:routed
+                        |
+                        +-- failure: emit JSON
+                              {"decision":"block","reason":"...subprocess failed; run /model X manually..."}
+                              write state.json status:failed
         |
         v
    exit 0
@@ -219,6 +233,7 @@ The result string is parsed by `for tier in ('haiku','sonnet','opus'): if tier i
 | `SWITCH_MODEL_NO_LLM=1`         | Skip the LLM stage; heuristic + context only        |
 | `SWITCH_MODEL_NO_CONTEXT=1`     | Skip transcript context analysis (stage 2)          |
 | `SWITCH_MODEL_NO_EFFORT=1`      | Skip effort selection; subprocess uses Claude default |
+| `SWITCH_MODEL_AUTO_UPGRADE=1`   | Skip the upgrade-confirmation gate (silent upgrades)|
 | `SWITCH_MODEL_DEBUG=1`          | Print classify decisions to stderr (hook log)       |
 | `SWITCH_MODEL_TRANSCRIPT_PATH`  | Path to session JSONL; set by router.sh             |
 | `MODEL_ROUTER_BYPASS=1`        | Recursion guard; subprocess sets this               |
@@ -343,11 +358,14 @@ When Anthropic changes pricing, update the `PRICE` dict.
 Bash. Key sections:
 
 - **stdin parsing** — extracts `prompt`, `transcript_path`, `session_id` via inline `python3 -c`. Bash `jq` would be cleaner but adds a dependency.
+- **bypass / consent prefixes** — `+force ` and `+keep ` exit 0 immediately (passthrough). `+upgrade ` strips the prefix and sets a local `FORCE_UPGRADE=1` flag that the upgrade gate later checks.
 - **classify** — pipes prompt to `python3 $PLUGIN_ROOT/lib/classify.py`. Result captured.
 - **current model detection** — `grep -o '"model":"claude-[a-z0-9-]*"' "$TRANSCRIPT" | tail -1`. First-prompt sessions have empty/missing transcript; falls back to `settings.json`.
-- **state.json write** — JSON with `current`, `suggested`, `status` (match/routed/failed), and `savings`.
+- **tier_rank()** — bash function mapping `haiku=0`, `sonnet=1`, `opus=2`. Used to detect upgrade direction (suggested rank > current rank).
+- **upgrade gate** — only fires on tier mismatch + `tier_rank(suggested) > tier_rank(current)`. Skipped when `FORCE_UPGRADE=1` or `SWITCH_MODEL_AUTO_UPGRADE=1`. Emits a `decision:block` reason instructing the user to re-submit with `+upgrade ` (or `+force `, or set the env var). State written as `status:upgrade_pending`.
+- **state.json write** — JSON with `current`, `suggested`, `status` (`match` / `routed` / `failed` / `upgrade_pending`), and `savings`.
 - **subprocess spawn** — `MODEL_ROUTER_BYPASS=1 timeout 120 claude -p --model <suggested> "<prompt>"`. Output captured. Recursion guarded by env var.
-- **block emission** — Python heredoc emits `{"decision":"block","reason":"..."}` JSON on stdout. Exit 0.
+- **block emission** — Python heredoc emits `{"decision":"block","reason":"..."}` JSON on stdout. Header reads `saves ~X%` when `savings_pct >= 0` and `costs ~+X%` when negative (upgrade-routed answers). Exit 0.
 
 The `printf '%s' "$INPUT" | python3 -c "..."` pattern avoids shell-escape issues with prompt content.
 
@@ -355,7 +373,7 @@ The `printf '%s' "$INPUT" | python3 -c "..."` pattern avoids shell-escape issues
 
 | Path                              | Contents                                       |
 |-----------------------------------|------------------------------------------------|
-| `~/.cache/switch-model/state.json` | `{current, suggested, status, savings?}`       |
+| `~/.cache/switch-model/state.json` | `{current, suggested, status, effort, savings?}` — `status` ∈ `match` / `routed` / `failed` / `upgrade_pending` |
 | `~/.cache/switch-model/router.log` | stderr of subprocess + classify.py debug       |
 
 State is written every hook fire (match cases too) so statusline always has fresh data.
@@ -505,6 +523,8 @@ tail -50 ~/.cache/switch-model/router.log
 | Change block-reason formatting               | `hooks/router.sh` Python heredoc      |
 | Add new env knobs                            | `lib/classify.py` and document in README/DEV |
 | Change recursion guard env var name          | `hooks/router.sh` and `classify.haiku_classify` (must stay in sync) |
+| Tune upgrade-gate behavior / message         | `hooks/router.sh` upgrade-gate block (after `tier_rank()`)          |
+| Add new bypass / consent prefixes            | `hooks/router.sh` near existing `+force` / `+keep` / `+upgrade` checks |
 
 ## Known issues
 
@@ -550,6 +570,32 @@ python3 lib/pricing.py haiku opus  200      # expect ~-1400
 MODEL_ROUTER_BYPASS=1 echo '{"prompt":"hi","transcript_path":"/dev/null","session_id":"x","cwd":"/tmp","hook_event_name":"UserPromptSubmit"}' \
   | CLAUDE_PLUGIN_ROOT=~/skills/switch-model bash hooks/router.sh
 # expect: empty stdout, exit 0
+
+# unit: upgrade gate fires (haiku → opus, no consent)
+TMP=$(mktemp -d) && mkdir -p "$TMP/.claude"
+echo '{"model":"claude-haiku-4-5"}' > "$TMP/.claude/settings.json"
+echo '{"prompt":"design an architecture for our rate limiter and explain why","transcript_path":"","session_id":"t"}' \
+  | HOME="$TMP" SWITCH_MODEL_NO_LLM=1 SWITCH_MODEL_NO_EFFORT=1 bash hooks/router.sh
+# expect: {"decision":"block","reason":"[switch-model] Upgrade suggested: haiku → opus ..."} exit 0
+
+# unit: +upgrade prefix bypasses gate
+echo '{"prompt":"+upgrade design an architecture and explain why","transcript_path":"","session_id":"t"}' \
+  | HOME="$TMP" SWITCH_MODEL_NO_LLM=1 SWITCH_MODEL_NO_EFFORT=1 bash hooks/router.sh
+# expect: real subprocess fires (or mock claude in PATH); header says "costs ~+X%"
+
+# unit: SWITCH_MODEL_AUTO_UPGRADE=1 bypasses gate session-wide
+echo '{"prompt":"design an architecture and explain why","transcript_path":"","session_id":"t"}' \
+  | HOME="$TMP" SWITCH_MODEL_AUTO_UPGRADE=1 SWITCH_MODEL_NO_LLM=1 SWITCH_MODEL_NO_EFFORT=1 bash hooks/router.sh
+# expect: real subprocess fires; no upgrade-pending block.
+rm -rf "$TMP"
+
+# unit: downgrade still auto-routes (opus → haiku, no consent needed)
+TMP=$(mktemp -d) && mkdir -p "$TMP/.claude"
+echo '{"model":"claude-opus-4-7"}' > "$TMP/.claude/settings.json"
+echo '{"prompt":"list files in lib","transcript_path":"","session_id":"t"}' \
+  | HOME="$TMP" SWITCH_MODEL_NO_LLM=1 SWITCH_MODEL_NO_EFFORT=1 bash hooks/router.sh
+# expect: real subprocess fires; header says "saves ~93%".
+rm -rf "$TMP"
 
 # e2e: tmux with throwaway session
 SID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

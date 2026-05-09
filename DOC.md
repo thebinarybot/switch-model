@@ -58,11 +58,14 @@ The Opus model never saw the prompt. The Haiku subprocess answered for ~$0.0001 
 | Subprocess routing          | Routed prompts run via `claude -p --model X`, answer returned inline |
 | Savings estimate            | Block-reason header shows estimated % saved vs current model       |
 | `+force` / `+keep` bypass   | Prefix prompt with `+force` to skip the router for this turn       |
+| `+upgrade` consent prefix   | Prefix prompt with `+upgrade` to confirm a router-suggested cheaper→pricier route |
+| Upgrade confirmation gate   | Cheaper→pricier routes are blocked and require explicit `+upgrade ` opt-in (or `SWITCH_MODEL_AUTO_UPGRADE=1`); downgrades still auto-route |
 | Recursion guard             | Subprocess sets env var so router doesn't fire on itself           |
 | Statusline badge (optional) | Shows current model + last routing decision                        |
 | Heuristics-only mode        | `SWITCH_MODEL_NO_LLM=1` skips the LLM tie-breaker                   |
 | No-context mode             | `SWITCH_MODEL_NO_CONTEXT=1` skips transcript signal analysis        |
 | No-effort mode              | `SWITCH_MODEL_NO_EFFORT=1` skips effort selection                   |
+| Auto-upgrade mode           | `SWITCH_MODEL_AUTO_UPGRADE=1` skips the upgrade confirmation gate (silent upgrades) |
 | Debug trace                 | `SWITCH_MODEL_DEBUG=1` logs decisions to hook stderr                |
 
 ## How effort matching helps
@@ -76,6 +79,18 @@ The plugin pairs every routed call with an effort level:
 - `deep dive into the consensus algorithm tradeoffs` on Opus → `xhigh` (research-grade)
 
 Per-tier effort ceilings prevent waste: Haiku capped at `low`, Sonnet at `high`, Opus at `max`.
+
+## How upgrade gating helps
+
+The router's job is to save money — but the classifier can decide your trivial-looking prompt actually needs Opus. If you started the session on Haiku to keep costs down, an automatic spawn into Opus would defeat that intent and surprise you with a bigger bill.
+
+The gate enforces consent on cost-increasing routes:
+
+- **Downgrade** (Opus → Haiku, Sonnet → Haiku, etc.): runs silently. Savings path, no friction.
+- **Upgrade** (Haiku → Sonnet/Opus, Sonnet → Opus): blocked with a confirmation message showing the cost increase. The user re-submits with `+upgrade ` to opt in for that one prompt, or `+force ` to keep their current cheaper tier.
+- **Session-wide opt-in**: set `SWITCH_MODEL_AUTO_UPGRADE=1` to restore silent upgrades for the rest of the session (useful when actively working on hard problems and OK with occasional Opus spawns).
+
+The gate fires only on tier transitions that *increase* cost. Same-tier matches and downgrades take the existing fast path.
 
 ## How context awareness helps
 
@@ -128,6 +143,7 @@ Recently shipped:
 - Hybrid heuristic + LLM tie-breaker
 - Transcript context awareness
 - Effort-level matching
+- Upgrade confirmation gate (cheaper→pricier routes require `+upgrade ` consent, opt-out via `SWITCH_MODEL_AUTO_UPGRADE=1`)
 
 ## Security
 

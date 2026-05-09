@@ -1,6 +1,6 @@
 {
   "name": "switch-model",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Token-saving model router for Claude Code. Classifies each prompt and routes to haiku/sonnet/opus via subprocess; main session model untouched. Estimates savings.",
   "author": {
     "name": "nithin"

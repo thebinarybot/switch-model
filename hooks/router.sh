@@ -26,10 +26,25 @@ if [[ "$PROMPT" == "+force "* || "$PROMPT" == "+keep "* ]]; then
   exit 0
 fi
 
+# +upgrade prefix → strip, mark explicit consent for cheaper→pricier route.
+FORCE_UPGRADE=0
+if [[ "$PROMPT" == "+upgrade "* ]]; then
+  FORCE_UPGRADE=1
+  PROMPT="${PROMPT#+upgrade }"
+fi
+
 # Empty / very short prompts → passthrough.
 if [[ ${#PROMPT} -lt 8 ]]; then
   exit 0
 fi
+
+tier_rank() {
+  case "$1" in
+    haiku) echo 0 ;;
+    opus)  echo 2 ;;
+    *)     echo 1 ;;
+  esac
+}
 
 # Classify (with transcript context if available).
 SUGGESTED=$(printf '%s' "$PROMPT" | SWITCH_MODEL_TRANSCRIPT_PATH="$TRANSCRIPT" python3 "$PLUGIN_ROOT/lib/classify.py" 2>>"$LOG")
@@ -71,6 +86,27 @@ fi
 # Mismatch → spawn subprocess on suggested model + effort.
 SAVINGS=$(python3 "$PLUGIN_ROOT/lib/pricing.py" "$CURRENT_TIER" "$SUGGESTED" "${#PROMPT}")
 
+# Upgrade gate: cheaper→pricier needs explicit consent.
+# Bypass: +upgrade prefix (this turn) or SWITCH_MODEL_AUTO_UPGRADE=1 (session).
+CUR_RANK=$(tier_rank "$CURRENT_TIER")
+SUG_RANK=$(tier_rank "$SUGGESTED")
+if (( SUG_RANK > CUR_RANK )) && [[ "$FORCE_UPGRADE" != "1" && "${SWITCH_MODEL_AUTO_UPGRADE:-0}" != "1" ]]; then
+  COST_PCT="${SAVINGS#-}"  # strip leading minus; savings is negative on upgrade
+  printf '{"current":"%s","suggested":"%s","effort":"%s","status":"upgrade_pending"}\n' "$CURRENT_TIER" "$SUGGESTED" "$EFFORT" > "$STATE_DIR/state.json"
+  python3 -c "
+import json
+msg = (
+  '[switch-model] Upgrade suggested: $CURRENT_TIER → $SUGGESTED @ $EFFORT effort '
+  '(~+${COST_PCT}% cost vs $CURRENT_TIER).\n\n'
+  'Re-submit with \`+upgrade \` prefix to run on $SUGGESTED.\n'
+  'Or \`+force \` to keep $CURRENT_TIER for this prompt.\n'
+  'Or set SWITCH_MODEL_AUTO_UPGRADE=1 to auto-confirm upgrades this session.'
+)
+print(json.dumps({'decision': 'block', 'reason': msg}))
+"
+  exit 0
+fi
+
 if [[ -n "$EFFORT" ]]; then
   ANSWER=$(MODEL_ROUTER_BYPASS=1 timeout 120 claude -p --model "$SUGGESTED" --effort "$EFFORT" "$PROMPT" 2>>"$LOG")
 else
@@ -97,7 +133,12 @@ printf '{"current":"%s","suggested":"%s","effort":"%s","status":"routed","saving
 python3 <<PY
 import json
 ans = """$ANSWER"""
-header = f"[switch-model: routed to $SUGGESTED @ $EFFORT effort · saves ~${SAVINGS}% vs $CURRENT_TIER]"
+sav = float("$SAVINGS")
+if sav >= 0:
+    cost_note = f"saves ~{sav:.0f}%"
+else:
+    cost_note = f"costs ~+{-sav:.0f}%"
+header = f"[switch-model: routed to $SUGGESTED @ $EFFORT effort · {cost_note} vs $CURRENT_TIER]"
 footer = "\n\n_(answered by subprocess. main session still on $CURRENT_TIER. prefix +force to bypass router.)_"
 print(json.dumps({"decision": "block", "reason": header + "\n\n" + ans + footer}))
 PY

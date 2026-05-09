@@ -34,6 +34,8 @@ Ambiguous prompts escalate to a haiku classifier call (~$0.0001, ~6s). Long prom
 
 It also reads your session transcript. Lots of recent errors? Routes higher. Long streak on one tier? Locks to it to stop flip-flopping.
 
+**Upgrades require consent.** If the suggested tier is *more expensive* than your current model (e.g. you're on Haiku and the prompt looks like architecture work for Opus), the router does NOT auto-spawn the pricier subprocess. It asks first — re-submit with a `+upgrade ` prefix to confirm, or `+force ` to keep your current tier. Downgrades (cheaper tier) still route silently. Set `SWITCH_MODEL_AUTO_UPGRADE=1` to opt into silent upgrades for the session.
+
 ---
 
 ## Ok, how do I install it?
@@ -105,6 +107,7 @@ Yes, via env vars:
 | `SWITCH_MODEL_NO_LLM=1` | Skip haiku classifier, use heuristics only (faster, less accurate) |
 | `SWITCH_MODEL_NO_CONTEXT=1` | Skip transcript context analysis |
 | `SWITCH_MODEL_NO_EFFORT=1` | Skip effort-level selection |
+| `SWITCH_MODEL_AUTO_UPGRADE=1` | Auto-confirm upgrades (cheaper→pricier routes) without asking |
 | `SWITCH_MODEL_DEBUG=1` | Print routing decisions to stderr for debugging |
 
 ---
@@ -120,6 +123,16 @@ Prefix it with `+force`:
 Router skips it entirely, your main session model handles it normally.
 
 ![+force bypass](assets/force.png)
+
+### Confirming an upgrade
+
+When the router suggests a *pricier* tier, it blocks the prompt and asks for confirmation. Re-submit with `+upgrade `:
+
+```
++upgrade design an architecture for our rate limiter
+```
+
+The prefix is stripped and the prompt routes to the suggested (pricier) model. Use `+force ` instead if you'd rather keep your current cheaper tier.
 
 ---
 
