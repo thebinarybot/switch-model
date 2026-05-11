@@ -34,7 +34,7 @@ Ambiguous prompts escalate to a haiku classifier call (~$0.0001, ~6s). Long prom
 
 It also reads your session transcript. Lots of recent errors? Routes higher. Long streak on one tier? Locks to it to stop flip-flopping.
 
-**Upgrades require consent.** If the suggested tier is *more expensive* than your current model (e.g. you're on Haiku and the prompt looks like architecture work for Opus), the router does NOT auto-spawn the pricier subprocess. It asks first — re-submit with a `+upgrade ` prefix to confirm, or `+force ` to keep your current tier. Downgrades (cheaper tier) still route silently. Set `SWITCH_MODEL_AUTO_UPGRADE=1` to opt into silent upgrades for the session.
+**Upgrades require consent.** If the suggested tier is *more expensive* than your current model (e.g. you're on Haiku and the prompt looks like architecture work for Opus), the router does NOT auto-spawn the pricier subprocess. It asks first; re-submit with a `+upgrade ` prefix to confirm, or `+force ` to keep your current tier. Downgrades (cheaper tier) still route silently. Set `SWITCH_MODEL_AUTO_UPGRADE=1` to opt into silent upgrades for the session.
 
 **Follow-ups skip routing.** Prompts that are clearly continuations of a prior turn ("now also add a header", "redo it differently", "the previous answer was wrong") get handled by your main session model, not a subprocess. Why: a subprocess has no access to the main session's history, so routing a follow-up would lose the context needed to answer correctly. Detection looks for short pronoun-led prompts, continuation cues at the start ("now ...", "and also ...", "instead", "undo"), and explicit references to prior answers.
 
@@ -162,7 +162,7 @@ If you already have a statusline (caveman, etc.), you'll need to merge the outpu
 
 A few things worth knowing upfront:
 
-- Routed answers don't enter your main session history. Follow-up questions won't have context from a routed reply. (The follow-up detector tries to catch this case and skip routing — see the section above.)
+- Routed answers don't enter your main session history. Follow-up questions won't have context from a routed reply. (The follow-up detector tries to catch this case and skip routing (see the section above).)
 - Routed prompts add 5 to 15 seconds of latency (subprocess spawn + optional classifier call).
 - Subprocess token cost doesn't show in `/cost`. Check the Anthropic console for full spend.
 - Heuristics miss edge cases sometimes. Use `+force` when they get it wrong.

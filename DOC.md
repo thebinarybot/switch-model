@@ -1,4 +1,4 @@
-# switch-model — High-Level Overview
+# switch-model: High-Level Overview
 
 A Claude Code plugin that automatically picks the cheapest Claude model capable of handling each prompt, then routes to it. Goal: cut Claude API spend without giving up quality on hard tasks.
 
@@ -23,7 +23,7 @@ For every user prompt:
 
 1. **Classifies** the prompt's complexity (haiku / sonnet / opus tier) using a hybrid of regex heuristics and a tiny LLM tie-breaker.
 2. **Compares** the suggested tier against the model the session is currently running.
-3. If they match, the prompt passes through normally — zero overhead.
+3. If they match, the prompt passes through normally, with zero overhead.
 4. If they differ, the plugin **silently runs the prompt on the suggested (usually cheaper) model** in a background process and returns the answer to the user, while the main session model stays unchanged.
 5. Shows the user the answer along with how much was saved.
 
@@ -72,7 +72,7 @@ The Opus model never saw the prompt. The Haiku subprocess answered for ~$0.0001 
 
 ## How effort matching helps
 
-A trivial question on Opus at `max` effort burns ~10× more reasoning tokens than at `low` effort. Without effort matching, Opus spends max-effort tokens on every prompt — even ones that don't need it.
+A trivial question on Opus at `max` effort burns ~10× more reasoning tokens than at `low` effort. Without effort matching, Opus spends max-effort tokens on every prompt, even ones that don't need it.
 
 The plugin pairs every routed call with an effort level:
 - `rename foo` on Haiku → `low` (no benefit from more reasoning on a small model)
@@ -84,25 +84,25 @@ Per-tier effort ceilings prevent waste: Haiku capped at `low`, Sonnet at `high`,
 
 ## How follow-up detection helps
 
-The plugin's biggest known limitation is that routed answers don't enter the main session's transcript — so if the user asks a follow-up like "now make it red", a subprocess invoked on that prompt has no idea what "it" refers to and produces a useless answer.
+The plugin's biggest known limitation is that routed answers don't enter the main session's transcript, so if the user asks a follow-up like "now make it red", a subprocess invoked on that prompt has no idea what "it" refers to and produces a useless answer.
 
 The follow-up detector solves this by recognizing the shape of follow-up prompts and exiting the hook silently before any subprocess fires. The main session then handles the prompt natively, with full access to its prior turns.
 
 What it catches:
-- **Short pronoun-led prompts** ("it should be red", "they are not working") — under 40 chars, opens with `it / that / this / they / he / she / them`.
+- **Short pronoun-led prompts** ("it should be red", "they are not working"): under 40 chars, opens with `it / that / this / they / he / she / them`.
 - **Continuation cues at the start** ("now also add...", "and then ...", "instead", "undo", "redo", "again", "continue").
 - **Explicit references to prior turns** ("the previous answer was wrong", "fix the above response", "more detail on the last one").
 - **Bare anaphoric phrases** ("show me more", "fix it", "do that again", "explain it again").
 
 What it does NOT catch (deliberately):
-- Self-contained prompts that happen to use pronouns ("they are inefficient" without further reference) — risk too high of false positives.
+- Self-contained prompts that happen to use pronouns ("they are inefficient" without further reference); risk too high of false positives.
 - Long prompts that mention "previous" but contain enough new content to stand alone.
 
-Tuning bias is conservative — when in doubt, route. False negatives just produce a slightly worse routed answer; false positives waste the main session's expensive tokens on a trivial prompt that should have routed to Haiku. Disable entirely with `SWITCH_MODEL_NO_FOLLOWUP=1` if needed.
+Tuning bias is conservative: when in doubt, route. False negatives just produce a slightly worse routed answer; false positives waste the main session's expensive tokens on a trivial prompt that should have routed to Haiku. Disable entirely with `SWITCH_MODEL_NO_FOLLOWUP=1` if needed.
 
 ## How upgrade gating helps
 
-The router's job is to save money — but the classifier can decide your trivial-looking prompt actually needs Opus. If you started the session on Haiku to keep costs down, an automatic spawn into Opus would defeat that intent and surprise you with a bigger bill.
+The router's job is to save money, but the classifier can decide your trivial-looking prompt actually needs Opus. If you started the session on Haiku to keep costs down, an automatic spawn into Opus would defeat that intent and surprise you with a bigger bill.
 
 The gate enforces consent on cost-increasing routes:
 
@@ -114,7 +114,7 @@ The gate fires only on tier transitions that *increase* cost. Same-tier matches 
 
 ## How context awareness helps
 
-Without context, the classifier sees only the current prompt. A session deep into debugging an auth bug might submit "fix this" — three trivial words that look like a haiku-tier prompt. With context, the plugin notices the last 10 turns had 4 tool errors and 3 file edits on auth code, and routes to opus instead.
+Without context, the classifier sees only the current prompt. A session deep into debugging an auth bug might submit "fix this", three trivial words that look like a haiku-tier prompt. With context, the plugin notices the last 10 turns had 4 tool errors and 3 file edits on auth code, and routes to opus instead.
 
 Specific adjustments:
 - **Active debugging** (recent errors) → bump tier up
@@ -135,7 +135,7 @@ Savings depend on prompt mix and session length. Estimated 70–85% cost reducti
 
 Honest limitations:
 
-- **No multi-turn memory in routed answers.** When a prompt is routed to a different tier via subprocess, the answer is rendered to the user but does NOT enter the main session's in-memory history. Follow-up questions don't see the routed answer's content. (Mitigated by the follow-up detector, which catches obvious continuations and skips routing — but it can't catch every case.)
+- **No multi-turn memory in routed answers.** When a prompt is routed to a different tier via subprocess, the answer is rendered to the user but does NOT enter the main session's in-memory history. Follow-up questions don't see the routed answer's content. (Mitigated by the follow-up detector, which catches obvious continuations and skips routing, but it can't catch every case.)
 - **5–15s latency on routed prompts.** Subprocess spawn + classifier LLM call adds wall-clock delay. Trivial prompts feel slower than they would on the main session.
 - **No streaming.** Routed answers appear all at once when subprocess finishes. No live token streaming.
 - **Cost split.** Subprocess token usage isn't shown in the main session's `/cost` output. Total spend is correct on the Anthropic console but split across two CLI invocations.
@@ -171,8 +171,8 @@ Recently shipped:
 The plugin runs entirely locally. It does not phone home, send prompts to third parties, or modify project files. The only network calls are to the Anthropic API (the same destination Claude Code itself uses).
 
 State files:
-- `~/.cache/switch-model/state.json` — last classification result (no prompt content)
-- `~/.cache/switch-model/router.log` — subprocess errors
+- `~/.cache/switch-model/state.json`: last classification result (no prompt content)
+- `~/.cache/switch-model/router.log`: subprocess errors
 
 ## Status
 

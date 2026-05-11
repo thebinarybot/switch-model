@@ -1,4 +1,4 @@
-# switch-model — Developer Documentation
+# switch-model: Developer Documentation
 
 Internal architecture and code-level reference for contributors and integrators.
 
@@ -97,7 +97,7 @@ user types prompt
         |
         v
    bypass prefix: if prompt starts with +force/+keep -> exit 0
-   (note: ! triggers Claude Code shell mode, # triggers memory shortcut —
+   (note: ! triggers Claude Code shell mode, # triggers memory shortcut;
     both eat the prompt before the hook fires. + has no special meaning.)
         |
         v
@@ -196,7 +196,7 @@ Confidence:
 | 2 or 3        | 0.6        | escalate to LLM              |
 | 0             | 0.3        | escalate (fallback: sonnet)  |
 
-PRIORITY ordering (`opus` > `sonnet` > `haiku`) resolves multi-match before escalation, so the heuristic tier is still set even when escalating — used as the LLM-failure fallback.
+PRIORITY ordering (`opus` > `sonnet` > `haiku`) resolves multi-match before escalation, so the heuristic tier is still set even when escalating, used as the LLM-failure fallback.
 
 Long-prompt adjustment: if `len(prompt) > 600`:
 - haiku → bumped to sonnet
@@ -308,12 +308,12 @@ exit:   0 = not a follow-up (continue routing)
 
 Four independent triggers (any one positive → flagged as follow-up):
 
-1. **Short pronoun-led prompt** — `len(prompt) < 40` AND opens with `it / that / this / they / these / those / he / she / him / her`. Catches "it should be red", "they are not working".
-2. **Continuation cue at start** — regex on `now (also|do|make|change|fix|add|remove|try) | and (also|now|then) | also | but (what about|wait) | instead | undo | redo | again | keep going | continue | more of (that|the same) | another (one|example) | do the same`.
-3. **Explicit reference to prior turn** — `(previous|above|last|earlier|prior) (answer|response|message|version|attempt|one|reply|output|result)`.
-4. **Bare anaphoric phrase** — `len(prompt) < 80` AND regex matches `show me more | tell me more | explain (it|that) again | why is (it|that) | what about (it|that) | do (it|that) (again|differently) | fix (it|that)`.
+1. **Short pronoun-led prompt**: `len(prompt) < 40` AND opens with `it / that / this / they / these / those / he / she / him / her`. Catches "it should be red", "they are not working".
+2. **Continuation cue at start**: regex on `now (also|do|make|change|fix|add|remove|try) | and (also|now|then) | also | but (what about|wait) | instead | undo | redo | again | keep going | continue | more of (that|the same) | another (one|example) | do the same`.
+3. **Explicit reference to prior turn**: `(previous|above|last|earlier|prior) (answer|response|message|version|attempt|one|reply|output|result)`.
+4. **Bare anaphoric phrase**: `len(prompt) < 80` AND regex matches `show me more | tell me more | explain (it|that) again | why is (it|that) | what about (it|that) | do (it|that) (again|differently) | fix (it|that)`.
 
-Bias is conservative — false negatives (route a follow-up) are cheaper than false positives (skip routing on a self-contained prompt that should have routed to Haiku).
+Bias is conservative: false negatives (route a follow-up) are cheaper than false positives (skip routing on a self-contained prompt that should have routed to Haiku).
 
 ### Env knobs
 
@@ -400,16 +400,16 @@ When Anthropic changes pricing, update the `PRICE` dict.
 
 Bash. Key sections:
 
-- **stdin parsing** — extracts `prompt`, `transcript_path`, `session_id` via inline `python3 -c`. Bash `jq` would be cleaner but adds a dependency.
-- **bypass / consent prefixes** — `+force ` and `+keep ` exit 0 immediately (passthrough). `+upgrade ` strips the prefix and sets a local `FORCE_UPGRADE=1` flag that the upgrade gate later checks.
-- **followup check** — pipes prompt to `python3 $PLUGIN_ROOT/lib/followup.py`. Exit 1 → write state `status:skipped_followup` and exit 0 (passthrough). Skipped when `SWITCH_MODEL_NO_FOLLOWUP=1`.
-- **classify** — pipes prompt to `python3 $PLUGIN_ROOT/lib/classify.py`. Result captured.
-- **current model detection** — `grep -o '"model":"claude-[a-z0-9-]*"' "$TRANSCRIPT" | tail -1`. First-prompt sessions have empty/missing transcript; falls back to `settings.json`.
-- **tier_rank()** — bash function mapping `haiku=0`, `sonnet=1`, `opus=2`. Used to detect upgrade direction (suggested rank > current rank).
-- **upgrade gate** — only fires on tier mismatch + `tier_rank(suggested) > tier_rank(current)`. Skipped when `FORCE_UPGRADE=1` or `SWITCH_MODEL_AUTO_UPGRADE=1`. Emits a `decision:block` reason instructing the user to re-submit with `+upgrade ` (or `+force `, or set the env var). State written as `status:upgrade_pending`.
-- **state.json write** — JSON with `current`, `suggested`, `status` (`match` / `routed` / `failed` / `upgrade_pending`), and `savings`.
-- **subprocess spawn** — `MODEL_ROUTER_BYPASS=1 timeout 120 claude -p --model <suggested> "<prompt>"`. Output captured. Recursion guarded by env var.
-- **block emission** — Python heredoc emits `{"decision":"block","reason":"..."}` JSON on stdout. Header reads `saves ~X%` when `savings_pct >= 0` and `costs ~+X%` when negative (upgrade-routed answers). Exit 0.
+- **stdin parsing**: extracts `prompt`, `transcript_path`, `session_id` via inline `python3 -c`. Bash `jq` would be cleaner but adds a dependency.
+- **bypass / consent prefixes**: `+force ` and `+keep ` exit 0 immediately (passthrough). `+upgrade ` strips the prefix and sets a local `FORCE_UPGRADE=1` flag that the upgrade gate later checks.
+- **followup check**: pipes prompt to `python3 $PLUGIN_ROOT/lib/followup.py`. Exit 1 → write state `status:skipped_followup` and exit 0 (passthrough). Skipped when `SWITCH_MODEL_NO_FOLLOWUP=1`.
+- **classify**: pipes prompt to `python3 $PLUGIN_ROOT/lib/classify.py`. Result captured.
+- **current model detection**: `grep -o '"model":"claude-[a-z0-9-]*"' "$TRANSCRIPT" | tail -1`. First-prompt sessions have empty/missing transcript; falls back to `settings.json`.
+- **tier_rank()**: bash function mapping `haiku=0`, `sonnet=1`, `opus=2`. Used to detect upgrade direction (suggested rank > current rank).
+- **upgrade gate**: only fires on tier mismatch + `tier_rank(suggested) > tier_rank(current)`. Skipped when `FORCE_UPGRADE=1` or `SWITCH_MODEL_AUTO_UPGRADE=1`. Emits a `decision:block` reason instructing the user to re-submit with `+upgrade ` (or `+force `, or set the env var). State written as `status:upgrade_pending`.
+- **state.json write**: JSON with `current`, `suggested`, `status` (`match` / `routed` / `failed` / `upgrade_pending`), and `savings`.
+- **subprocess spawn**: `MODEL_ROUTER_BYPASS=1 timeout 120 claude -p --model <suggested> "<prompt>"`. Output captured. Recursion guarded by env var.
+- **block emission**: Python heredoc emits `{"decision":"block","reason":"..."}` JSON on stdout. Header reads `saves ~X%` when `savings_pct >= 0` and `costs ~+X%` when negative (upgrade-routed answers). Exit 0.
 
 The `printf '%s' "$INPUT" | python3 -c "..."` pattern avoids shell-escape issues with prompt content.
 
@@ -417,7 +417,7 @@ The `printf '%s' "$INPUT" | python3 -c "..."` pattern avoids shell-escape issues
 
 | Path                              | Contents                                       |
 |-----------------------------------|------------------------------------------------|
-| `~/.cache/switch-model/state.json` | `{current, suggested, status, effort, savings?}` — `status` ∈ `match` / `routed` / `failed` / `upgrade_pending` / `skipped_followup` |
+| `~/.cache/switch-model/state.json` | `{current, suggested, status, effort, savings?}`; status in: `match` / `routed` / `failed` / `upgrade_pending` / `skipped_followup` |
 | `~/.cache/switch-model/router.log` | stderr of subprocess + classify.py debug       |
 
 State is written every hook fire (match cases too) so statusline always has fresh data.
@@ -448,8 +448,8 @@ Combines `model.display_name` with the last decision from `state.json`. Output f
 
 The hook spawns `claude` subprocesses for two reasons:
 
-1. **Classifier** — `claude -p --model haiku` for ambiguous prompts.
-2. **Routed answer** — `claude -p --model <suggested>` for the actual response.
+1. **Classifier**: `claude -p --model haiku` for ambiguous prompts.
+2. **Routed answer**: `claude -p --model <suggested>` for the actual response.
 
 Both inherit env from the hook process. `MODEL_ROUTER_BYPASS=1` is set for both, so when the subprocess fires its own UserPromptSubmit, `router.sh`'s first check returns immediately.
 
@@ -463,11 +463,11 @@ Investigated alternatives:
 
 | Approach                          | Verdict                                     |
 |-----------------------------------|---------------------------------------------|
-| Hook switches model programmatically | NOT POSSIBLE — no documented API         |
-| Custom keybinding chains `/model` + submit | NOT POSSIBLE — keybindings are namespaced action dispatch only, no shell/slash-command invocation, no input-buffer access, no plugin bundling |
-| Hook rewrites prompt              | NOT POSSIBLE — only block / additionalContext / sessionTitle |
+| Hook switches model programmatically | NOT POSSIBLE: no documented API         |
+| Custom keybinding chains `/model` + submit | NOT POSSIBLE: keybindings are namespaced action dispatch only, no shell/slash-command invocation, no input-buffer access, no plugin bundling |
+| Hook rewrites prompt              | NOT POSSIBLE: only block / additionalContext / sessionTitle |
 | Subprocess writes to active session JSONL via `--resume` | TUI doesn't live-render filesystem changes; injected turn invisible |
-| Subprocess + return as block reason | **WORKS** — current implementation         |
+| Subprocess + return as block reason | **WORKS**: current implementation         |
 
 These constraints are documented at https://code.claude.com/docs/en/hooks.md and https://code.claude.com/docs/en/keybindings.md.
 
@@ -491,11 +491,11 @@ claude --plugin-dir ~/skills/switch-model
 
 | Edited file                | Reload required?                       |
 |----------------------------|----------------------------------------|
-| `lib/*.py`                 | No — read fresh each invocation        |
-| `hooks/router.sh`          | No — read fresh each invocation        |
-| `hooks/hooks.json`         | Yes — restart session (or disable+enable) |
-| `.claude-plugin/plugin.json` | Yes — restart session                |
-| Marketplace manifest       | Yes — `claude plugin marketplace update` |
+| `lib/*.py`                 | No; read fresh each invocation        |
+| `hooks/router.sh`          | No; read fresh each invocation        |
+| `hooks/hooks.json`         | Yes; restart session (or disable+enable) |
+| `.claude-plugin/plugin.json` | Yes; restart session                |
+| Marketplace manifest       | Yes; `claude plugin marketplace update` |
 
 Disable / re-enable:
 
